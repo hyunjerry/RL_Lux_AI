@@ -12,9 +12,11 @@ import torch.optim as optim
 from sklearn.model_selection import train_test_split
 
 EPISODE_DIR = (
-    "/Users/shiva/agent_share/sp2024_RL/full_episodes/top_agents"
+    # "C:/Users/ypp70/Desktop/DS598 RL/Midterm Champion/full_episodes/top_agents"
+    "/content/drive/My Drive/Agent_share/full_episodes/top_agents"
 )
 MODEL_DIR = "./"
+# print(os.getcwd())
 
 
 def seed_everything(seed_value):
@@ -74,8 +76,9 @@ def create_dataset_from_json(episode_dir, team_name="Toad Brigade"):
     episodes = [
         str(ep) for ep in episodes if "info" not in str(ep) and "output" not in str(ep)
     ]
-
-    # episodes = episodes[-1500:]
+    print(f"{len(episodes)} episodes")
+    # 30min with all json files
+    episodes = episodes[-100:]
     # random.shuffle(episodes)
 
     for filepath in tqdm(episodes):
@@ -123,7 +126,7 @@ def create_dataset_from_json(episode_dir, team_name="Toad Brigade"):
 
 # the directory of the training dataset
 episode_dir = EPISODE_DIR
-
+# print(os.listdir())
 obses, samples = create_dataset_from_json(episode_dir)
 print("obses:", len(obses), "samples:", len(samples))
 
@@ -259,11 +262,14 @@ class LuxDataset(Dataset):
 
         return state_1, state_2, action_map
 
-
-def train_model(model, dataloaders_dict, criterion, optimizer, num_epochs):
+# 4min per epoch
+def train_model(model, dataloaders_dict, criterion, optimizer, num_epochs, model_no=0):
     global best_acc
     global global_epoch
     global_epoch += 1
+    global best_loss
+    global epochs_without_improvement
+    patience = 3
 
     for epoch in range(num_epochs):
         model.cuda()
@@ -287,7 +293,6 @@ def train_model(model, dataloaders_dict, criterion, optimizer, num_epochs):
 
                 with torch.set_grad_enabled(phase == "train"):
                     policy = model(states_1, states_2)
-
                     loss = criterion(policy, actions)
 
                     if phase == "train":
@@ -298,27 +303,35 @@ def train_model(model, dataloaders_dict, criterion, optimizer, num_epochs):
                     epoch_acc += torch.sum(actions == policy.argmax(dim=1))
                     # epoch_num is used to calculate the number of workers that actually go to loss, which can help us get the accuracy
                     epoch_num += torch.sum(actions >= 0)
+
             data_size = len(dataloader.dataset)
             epoch_loss = epoch_loss / data_size
             epoch_acc = epoch_acc.double() / epoch_num
 
-            print(
-                f"Epoch {global_epoch}/100 | {phase:^5} | Loss: {epoch_loss:.4f} | Acc: {epoch_acc:.4f}"
-            )
+            print(f"Epoch {global_epoch}/40 | {phase:^5} | Loss: {epoch_loss:.4f} | Acc: {epoch_acc:.4f}")
 
         if epoch_acc >= best_acc:
             print("save model...")
-            traced = torch.jit.trace(
-                model.cpu(), (torch.rand(1, 14, 32, 32), torch.rand(1, 15, 4, 4))
-            )
-            traced.save(
-                f"{MODEL_DIR}/model_all_top_agents_40_epochss_{epoch_acc:.2f}.pth"
-            )
+            traced = torch.jit.trace(model.cpu(), (torch.rand(1, 14, 32, 32), torch.rand(1, 15, 4, 4)))
+            traced.save(f"{MODEL_DIR}/model_{model_no}_{global_epoch}_epochs_accu_{epoch_acc:.2f}_loss_{epoch_loss:.2f}.pth")
             best_acc = epoch_acc
+
+        if epoch_loss <= best_loss:
+            best_loss = epoch_loss
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement > patience:
+                print(f'Early stopping at epoch {epoch}')
+                return 'stop'
+    return 0
+
 
 
 from unet_model import UNet
+max_epoch = 40
 
+print('#################model0')
 model = UNet(14, 5, 15)
 
 train, val = train_test_split(samples, test_size=0.1, random_state=42)
@@ -332,13 +345,108 @@ val_loader = DataLoader(
 dataloaders_dict = {"train": train_loader, "val": val_loader}
 # We set ignore_index=-1 to ignore positions without workers
 criterion = nn.CrossEntropyLoss(ignore_index=-1)
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+optimizer = torch.optim.AdamW(model.cuda().parameters(), lr=1e-3)
 # Using exponential decayed LR
 scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.98)
 best_acc = 0.0
 global_epoch = 0
-for n in range(40):
+best_loss = float("inf")
+epochs_without_improvement = 0
+
+for n in range(max_epoch):
     print("Learning with lr :", optimizer.state_dict()["param_groups"][0]["lr"])
-    train_model(model, dataloaders_dict, criterion, optimizer, num_epochs=1)
+    check = train_model(model, dataloaders_dict, criterion, optimizer, num_epochs=1, model_no=0)
+    if check == 'stop':
+        break
+    # We set the LR decayed every epoch
+    scheduler.step()
+
+print('#################model1')
+model = UNet(14, 5, 15)
+
+train, val = train_test_split(samples, test_size=0.1, random_state=10)
+batch_size = 256
+train_loader = DataLoader(
+    LuxDataset(obses, train), batch_size=batch_size, shuffle=True, num_workers=1
+)
+val_loader = DataLoader(
+    LuxDataset(obses, val), batch_size=batch_size, shuffle=False, num_workers=1
+)
+dataloaders_dict = {"train": train_loader, "val": val_loader}
+# We set ignore_index=-1 to ignore positions without workers
+criterion = nn.CrossEntropyLoss(ignore_index=-1)
+optimizer = torch.optim.AdamW(model.cuda().parameters(), lr=1e-3)
+# Using exponential decayed LR
+scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.98)
+best_acc = 0.0
+global_epoch = 0
+best_loss = float("inf")
+epochs_without_improvement = 0
+
+for n in range(max_epoch):
+    print("Learning with lr :", optimizer.state_dict()["param_groups"][0]["lr"])
+    check = train_model(model, dataloaders_dict, criterion, optimizer, num_epochs=1, model_no=1)
+    if check == 'stop':
+        break
+    # We set the LR decayed every epoch
+    scheduler.step()
+
+print('#################model2')
+model = UNet(14, 5, 15)
+
+train, val = train_test_split(samples, test_size=0.1, random_state=42)
+batch_size = 256
+train_loader = DataLoader(
+    LuxDataset(obses, train), batch_size=batch_size, shuffle=True, num_workers=1
+)
+val_loader = DataLoader(
+    LuxDataset(obses, val), batch_size=batch_size, shuffle=False, num_workers=1
+)
+dataloaders_dict = {"train": train_loader, "val": val_loader}
+# We set ignore_index=-1 to ignore positions without workers
+criterion = nn.CrossEntropyLoss(ignore_index=-1)
+optimizer = torch.optim.Adagrad(model.cuda().parameters(), lr=1e-2)
+# Using exponential decayed LR
+scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.98)
+best_acc = 0.0
+global_epoch = 0
+best_loss = float("inf")
+epochs_without_improvement = 0
+
+for n in range(max_epoch):
+    print("Learning with lr :", optimizer.state_dict()["param_groups"][0]["lr"])
+    check = train_model(model, dataloaders_dict, criterion, optimizer, num_epochs=1, model_no=2)
+    if check == 'stop':
+        break
+    # We set the LR decayed every epoch
+    scheduler.step()
+
+print('#################model3')
+model = UNet(14, 5, 15)
+
+train, val = train_test_split(samples, test_size=0.1, random_state=10)
+batch_size = 256
+train_loader = DataLoader(
+    LuxDataset(obses, train), batch_size=batch_size, shuffle=True, num_workers=1
+)
+val_loader = DataLoader(
+    LuxDataset(obses, val), batch_size=batch_size, shuffle=False, num_workers=1
+)
+dataloaders_dict = {"train": train_loader, "val": val_loader}
+# We set ignore_index=-1 to ignore positions without workers
+criterion = nn.CrossEntropyLoss(ignore_index=-1)
+optimizer = torch.optim.Adagrad(model.cuda().parameters(), lr=1e-2)
+# Using exponential decayed LR
+scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.98)
+best_acc = 0.0
+global_epoch = 0
+best_loss = float("inf")
+epochs_without_improvement = 0
+
+for n in range(max_epoch):
+    print("Learning with lr :", optimizer.state_dict()["param_groups"][0]["lr"])
+    check = train_model(model, dataloaders_dict, criterion, optimizer, num_epochs=1, model_no=3)
+    if check == 'stop':
+        break
     # We set the LR decayed every epoch
     scheduler.step()
