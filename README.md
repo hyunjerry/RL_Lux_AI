@@ -22,6 +22,13 @@
 - Note that Kaggle submission file has to be less than 100Mb
 
 
+### Train/Modify Transformer method
+```
+# Open the file transformer/Transformer_LuxAI.ipynb
+# Follow the instructions inside. You can tune your hyperparameter inside this notebook.
+# This notebook will save model.pth from each epoch. Simply observe the accuracy after each epoch from choosing the model you want. 
+```
+
 Files greater than 100mb has been removed in accordance to github policy. 
 Removed files:
 - ./UNet_attention_jason_0-3_ensemble/submission.tar
